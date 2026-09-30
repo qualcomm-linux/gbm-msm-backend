@@ -14,11 +14,12 @@
 
 struct gbm_msm_device {
    struct gbm_device base;
+   int kgsl_fd; /* File descriptor for /dev/kgsl-3d0 */
 };
 
 struct gem_handle_ref {
-    uint32_t handle;        // The GEM handle
-    int refcount;      // Reference count
+    uint32_t handle;   /* KGSL GPU object id */
+    int refcount;      /* Reference count */
 };
 
 struct gem_handle_map {
