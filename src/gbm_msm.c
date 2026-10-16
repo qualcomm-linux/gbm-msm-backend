@@ -20,6 +20,8 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <fcntl.h>
+#include <xf86drm.h>
 
 #include "gbm_msm.h"
 #include "gbm_msm_int.h"
@@ -113,9 +115,10 @@ static void remove_gem_handle(struct gbm_msm_device *msm_dev, uint32_t handle)
 
       int ret = free_buffer(msm_dev, handle);
       if (ret != 0) {
-	 fprintf(stderr, "Failed to close GEM handle for BO=%u\n error=%s", handle, strerror(errno));
-	 UNLOCK(gem_handle_mutex);
-	 return;
+         fprintf(stderr, "Failed to free KGSL GPU object id=%u: %s\n",
+                 handle, strerror(errno));
+         UNLOCK(gem_handle_mutex);
+         return;
       }
 
       for (size_t j = i; j < map.size - 1; j++) {
@@ -148,25 +151,38 @@ gbm_msm_bo_map(struct gbm_bo *_bo, uint32_t x, uint32_t y,
    void *cpuaddr = NULL;
    struct gbm_msm_device *msm_dev = gbm_msm_device(_bo->gbm);
    struct gbm_msm_bo *msm_bo = gbm_msm_bo(_bo);
+   struct gbm_msm_bo_ext *msm_bo_ext = gbm_msm_bo_ext(msm_bo);
 
    if(msm_bo->map != NULL) {
+     msm_bo_ext->map_refcount++;
+     *stride = _bo->v0.stride;
      *map_data = msm_bo->map;
      return msm_bo->map;
    }
 
+   int mmap_fd;
    uint64_t mmap_offset;
-   if (bo_offset(_bo->gbm->v0.fd, _bo->v0.handle.u32, &mmap_offset))
-      return NULL;
 
-   cpuaddr = mmap(0, msm_bo->size, PROT_READ|PROT_WRITE, MAP_SHARED, _bo->gbm->v0.fd, mmap_offset);
+   if (msm_bo->fd >= 0) {
+      mmap_fd     = msm_bo->fd;
+      mmap_offset = 0;
+   } else {
+      mmap_fd = msm_dev->kgsl_fd;
+      bo_offset(msm_bo_ext->kgsl_id, &mmap_offset);
+   }
+
+   cpuaddr = mmap(0, msm_bo->size, PROT_READ|PROT_WRITE, MAP_SHARED,
+                  mmap_fd, mmap_offset);
    if(cpuaddr == MAP_FAILED) {
       perror("mmap");
       msm_bo->map = NULL;
       return NULL;
    }
 
+   *stride = _bo->v0.stride;
    *map_data = cpuaddr;
    msm_bo->map = cpuaddr;
+   msm_bo_ext->map_refcount++;
 
    return cpuaddr;
 }
@@ -175,8 +191,14 @@ static void
 gbm_msm_bo_unmap(struct gbm_bo *_bo, void *map_data)
 {
    struct gbm_msm_bo *msm_bo = gbm_msm_bo(_bo);
+   struct gbm_msm_bo_ext *msm_bo_ext = gbm_msm_bo_ext(msm_bo);
+   if (msm_bo_ext->map_refcount > 1) {
+      msm_bo_ext->map_refcount--;
+      return;
+   }
    munmap(map_data, msm_bo->size);
    msm_bo->map = NULL;
+   msm_bo_ext->map_refcount = 0;
 }
 
 static int
@@ -297,6 +319,8 @@ gbm_msm_bo_create(struct gbm_device *gbm,
    bo->base.v0.width = width;
    bo->base.v0.height = height;
    bo->base.v0.format = format;
+   bo->fd = -1;
+
    for (int m = 0; m < count; m++) {
       modifiers_mask |= modifiers[m];
    }
@@ -316,10 +340,22 @@ gbm_msm_bo_create(struct gbm_device *gbm,
    if (get_size(&bufdesc, &size) != 0)
       return NULL;
 
-   if (allocate_buffer(msm_dev, size, usage, &(bo->base.v0.handle.u32)) != 0)
+   int dmabuf_fd = -1;
+   if (allocate_buffer(msm_dev, size, usage, &(bo->base.v0.handle.u32), &dmabuf_fd) != 0)
       return NULL;
 
-   add_gem_handle(bo->base.v0.handle.u32);
+   msm_bo_ext->kgsl_id = bo->base.v0.handle.u32;
+   bo->fd = dmabuf_fd;
+
+   if (dmabuf_fd >= 0) {
+      uint32_t gem_handle = 0;
+      if (drmPrimeFDToHandle(msm_dev->base.v0.fd, dmabuf_fd, &gem_handle) == 0) {
+         bo->base.v0.handle.u32 = gem_handle;
+         msm_bo_ext->drm_gem_handle = gem_handle;
+      }
+   }
+
+   add_gem_handle(msm_bo_ext->kgsl_id);
 
    if (get_stride(&bufdesc, 0, &(bo->base.v0.stride)) != 0)
       return NULL;
@@ -349,6 +385,7 @@ gbm_msm_bo_import(struct gbm_device *gbm,
       return NULL;
 
    struct gbm_msm_bo *bo = &msm_bo_ext->msm_bo;
+   bo->fd = -1;
 
    switch (type) {
    case GBM_BO_IMPORT_FD:
@@ -357,8 +394,22 @@ gbm_msm_bo_import(struct gbm_device *gbm,
          return NULL;
       }
 
-      bo->base.v0.handle.u32 = handle;
+      msm_bo_ext->kgsl_id = handle;
       add_gem_handle(handle);
+
+      {
+         uint32_t gem_handle = 0;
+         if (drmPrimeFDToHandle(msm_dev->base.v0.fd, fd_data->fd,
+                                &gem_handle) == 0) {
+            bo->base.v0.handle.u32 = gem_handle;
+            msm_bo_ext->drm_gem_handle = gem_handle;
+         } else {
+            bo->base.v0.handle.u32 = handle;
+            msm_bo_ext->drm_gem_handle = 0;
+         }
+      }
+      bo->fd = dup(fd_data->fd);
+
       bo->base.gbm = gbm;
       bo->base.v0.width = fd_data->width;
       bo->base.v0.height = fd_data->height;
@@ -392,8 +443,23 @@ gbm_msm_bo_import(struct gbm_device *gbm,
          return NULL;
       }
 
-      bo->base.v0.handle.u32 = handle;
+      msm_bo_ext->kgsl_id = handle;
       add_gem_handle(handle);
+
+      {
+         uint32_t gem_handle = 0;
+         if (drmPrimeFDToHandle(msm_dev->base.v0.fd, fd_modifer_data->fds[0],
+                                &gem_handle) == 0) {
+            bo->base.v0.handle.u32 = gem_handle;
+            msm_bo_ext->drm_gem_handle = gem_handle;
+         } else {
+            bo->base.v0.handle.u32 = handle;
+            msm_bo_ext->drm_gem_handle = 0;
+         }
+      }
+
+      bo->fd = dup(fd_modifer_data->fds[0]);
+
       bo->base.gbm = gbm;
       bo->base.v0.width = fd_modifer_data->width;
       bo->base.v0.height = fd_modifer_data->height;
@@ -443,29 +509,41 @@ gbm_msm_bo_destroy(struct gbm_bo *_bo)
    if (bo == NULL)
       return;
 
-   remove_gem_handle(msm_dev, bo->base.v0.handle.u32);
+   struct gbm_msm_bo_ext *msm_bo_ext = gbm_msm_bo_ext(bo);
+   remove_gem_handle(msm_dev, msm_bo_ext->kgsl_id);
+
+   if (msm_bo_ext->drm_gem_handle != 0) {
+      drmCloseBufferHandle(msm_dev->base.v0.fd, msm_bo_ext->drm_gem_handle);
+      msm_bo_ext->drm_gem_handle = 0;
+   }
+
+   if (bo->fd >= 0) {
+      close(bo->fd);
+      bo->fd = -1;
+   }
 
    if (bo->map) {
      void *map_data = bo->map;
      gbm_msm_bo_unmap(_bo, map_data);
    }
 
-   struct gbm_msm_bo_ext *msm_bo_ext = gbm_msm_bo_ext(bo);
    free(msm_bo_ext);
-   msm_bo_ext = NULL;
 }
 
 static int
 gbm_msm_bo_get_fd(struct gbm_bo *_bo)
 {
-   struct gbm_msm_bo *msm_bo = (struct gbm_msm_bo*)_bo;
+   struct gbm_msm_bo *msm_bo = gbm_msm_bo(_bo);
 
-   int fd;
-   struct gbm_msm_device *msm_dev = gbm_msm_device(_bo->gbm);
-   if (get_fd(msm_dev, _bo->v0.handle.u32, &fd) != 0) {
+   if (msm_bo->fd < 0) {
       return -1;
    }
 
+   int fd = dup(msm_bo->fd);
+   if (fd < 0) {
+      fprintf(stderr, "get_fd: dup failed: %s\n", strerror(errno));
+      return -1;
+   }
    return fd;
 }
 
@@ -555,6 +633,10 @@ gbm_msm_destroy(struct gbm_device *gbm)
    if(msm_dev == NULL)
       return;
    free_gem_handle_map(msm_dev);
+   if (msm_dev->kgsl_fd >= 0) {
+      close(msm_dev->kgsl_fd);
+      msm_dev->kgsl_fd = -1;
+   }
    free(msm_dev);
    msm_dev = NULL;
 }
@@ -742,9 +824,18 @@ msm_device_create(int fd, uint32_t gbm_backend_version)
    if (!msm)
       return NULL;
 
+   msm->kgsl_fd = -1;
+
    init_xml_schema();
 
    msm->base.v0.fd = fd;
+
+   msm->kgsl_fd = open("/dev/kgsl-3d0", O_RDWR | O_CLOEXEC);
+   if (msm->kgsl_fd < 0) {
+      free(msm);
+      return NULL;
+   }
+
    msm->base.v0.backend_version = gbm_backend_version;
    msm->base.v0.bo_create = gbm_msm_bo_create;
    msm->base.v0.surface_create = gbm_msm_surface_create;
@@ -784,4 +875,3 @@ const struct gbm_backend *gbmint_get_backend(const struct gbm_core *gbm_core) {
    gbm_core_ = gbm_core;
    return &gbm_msm_backend;
 }
-

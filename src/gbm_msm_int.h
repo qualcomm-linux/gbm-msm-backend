@@ -14,6 +14,7 @@
 
 struct gbm_msm_device {
    struct gbm_device base;
+   int kgsl_fd;
 };
 
 struct gem_handle_ref {
@@ -35,8 +36,11 @@ struct gbm_bufdesc {
 };
 
 struct gbm_msm_bo_ext {
-    struct gbm_msm_bo msm_bo;
-    uint32_t gbm_format;
+   struct gbm_msm_bo msm_bo;
+   uint32_t gbm_format;
+   uint32_t kgsl_id;
+   uint32_t drm_gem_handle;
+   int map_refcount;
 };
 
 #endif
