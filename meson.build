@@ -17,8 +17,9 @@ ext_includes = include_directories('external')
 gbm = dependency('gbm', version : ['>=21.2'])
 dep_libxml2 = dependency('libxml-2.0')
 
-arch = run_command('dpkg-architecture', '-qDEB_HOST_MULTIARCH').stdout().strip()
-libdir = '/usr/lib' + (arch != '' ? '/' + arch : '')
+# Use Meson's standard install-directory options so package recipes select
+# their distro-specific layout (Debian multiarch or RPM lib/lib64).
+libdir = get_option('prefix') / get_option('libdir')
 
 c_args = ['-DLIBDIR="' + libdir + '"']
 subdir('src')

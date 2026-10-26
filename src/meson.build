@@ -36,3 +36,8 @@ msm_gbm = shared_module('msm_gbm',
     name_prefix: '',
     c_args: c_args,
 )
+
+install_data(
+    'default_fmt_alignment.xml',
+    install_dir: libdir / 'gbm',
+)
