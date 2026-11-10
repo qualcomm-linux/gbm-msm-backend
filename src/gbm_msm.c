@@ -277,6 +277,53 @@ gbm_msm_bo_get_aligned_width_height(struct gbm_bo *_bo, int plane,
    }
 }
 
+static int
+gbm_msm_is_format_supported(struct gbm_device *gbm,
+                            uint32_t format, uint32_t usage)
+{
+   const char *format_name;
+
+   (void) usage;
+
+   if (!gbm)
+      return 0;
+
+   format = gbm_core_->v0.format_canonicalize(format);
+   format_name = find_format_name(format);
+
+   return format_name && get_format_info(format_name);
+}
+
+static int
+gbm_msm_get_format_modifier_plane_count(struct gbm_device *gbm,
+                                        uint32_t format, uint64_t modifier)
+{
+   struct gbm_bufdesc bufdesc = {};
+   uint32_t num_planes = 0;
+
+   if (!gbm)
+      return -1;
+
+   bufdesc.format = gbm_core_->v0.format_canonicalize(format);
+
+   /*
+    * Validate the format/modifier pair through the same layout-selection path
+    * used for buffer creation. This rejects unknown modifiers and compressed
+    * layouts for formats without UBWC metadata.
+    */
+   if (get_best_layout(1, &modifier, &bufdesc) != 0)
+      return -1;
+
+   /*
+    * Qualcomm metadata and all format planes share one allocation. Therefore,
+    * a modifier does not add separately exported planes in this backend.
+    */
+   if (get_num_planes(&bufdesc, &num_planes) != 0)
+      return -1;
+
+   return (int) num_planes;
+}
+
 static struct gbm_bo *
 gbm_msm_bo_create(struct gbm_device *gbm,
               uint32_t width, uint32_t height,
@@ -746,6 +793,8 @@ msm_device_create(int fd, uint32_t gbm_backend_version)
 
    msm->base.v0.fd = fd;
    msm->base.v0.backend_version = gbm_backend_version;
+   msm->base.v0.is_format_supported = gbm_msm_is_format_supported;
+   msm->base.v0.get_format_modifier_plane_count = gbm_msm_get_format_modifier_plane_count;
    msm->base.v0.bo_create = gbm_msm_bo_create;
    msm->base.v0.surface_create = gbm_msm_surface_create;
    msm->base.v0.surface_destroy = gbm_msm_surface_destroy;
