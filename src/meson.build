@@ -32,7 +32,7 @@ msm_gbm = shared_module('msm_gbm',
     ],
     include_directories : ext_includes,
     install : true,
-    install_dir: libdir / 'gbm',
+    install_dir: gbmbackendspath,
     name_prefix: '',
     c_args: c_args,
 )
@@ -41,4 +41,9 @@ install_symlink(
     'msm-kms_gbm.so',
     install_dir: gbmbackendspath,
     pointing_to: 'msm_gbm.so',
+)
+
+install_data(
+    'default_fmt_alignment.xml',
+    install_dir: gbmbackendspath,
 )

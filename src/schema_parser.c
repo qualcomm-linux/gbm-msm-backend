@@ -11,8 +11,8 @@
 #include "schema_parser.h"
 #include "gbm_msm_int.h"
 
-#ifndef LIBDIR
-#define LIBDIR "/usr/lib"  // Default value if LIBDIR is not defined
+#ifndef GBM_BACKENDS_PATH
+#define GBM_BACKENDS_PATH "/usr/lib/gbm"  // Default value if not set by the build
 #endif
 
 int format_count = 0;
@@ -211,7 +211,7 @@ void init_xml_schema(void)
 {
    char filename[256];
    // @todo: decide the filename to be parsed based on the SoC variant
-   snprintf(filename, sizeof(filename), "%s/gbm/default_fmt_alignment.xml", LIBDIR);
+   snprintf(filename, sizeof(filename), "%s/default_fmt_alignment.xml", GBM_BACKENDS_PATH);
    formats = parse_xml(filename);
 }
 

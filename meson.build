@@ -17,8 +17,14 @@ ext_includes = include_directories('external')
 gbm = dependency('gbm', version : ['>=21.2'])
 dep_libxml2 = dependency('libxml-2.0')
 
-arch = run_command('dpkg-architecture', '-qDEB_HOST_MULTIARCH').stdout().strip()
-libdir = '/usr/lib' + (arch != '' ? '/' + arch : '')
+libdir = get_option('prefix') / get_option('libdir')
+gbmbackendspath = libdir / 'gbm'
 
-c_args = ['-DLIBDIR="' + libdir + '"']
+install_headers(
+    'src/gbm_msm.h',
+    'external/gbm_backend_abi.h',
+    subdir : 'gbm-msm',
+)
+
+c_args = ['-DGBM_BACKENDS_PATH="' + gbmbackendspath + '"']
 subdir('src')
