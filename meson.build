@@ -4,6 +4,7 @@ project('libgbm-msm', 'c',
           'buildtype=debugoptimized',
           'c_std=gnu99',
           'warning_level=1',
+          'werror=true',
         ],
         meson_version : '>= 0.50'
 )
