@@ -5,7 +5,7 @@ project('libgbm-msm', 'c',
           'c_std=gnu99',
           'warning_level=1',
         ],
-        meson_version : '>= 0.50'
+        meson_version : '>= 0.61'
 )
 
 cc = meson.get_compiler('c')
